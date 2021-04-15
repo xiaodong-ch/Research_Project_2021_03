@@ -1,0 +1,86 @@
+---
+title: "Exploration Health metadata"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+# loads the libraries
+library(tidyverse)
+library(knitr)
+library(dplyr)
+library(reshape2)
+
+# import tables of the questionnaires and the fields informations
+field_data <- read_csv("../Health_data/fields_extracted.csv")
+TMonths_data <- read_csv("../Health_data/Health_3months_18.03.21.csv")
+Reg_data <- read_csv("../Health_data/Health_Reg_18.03.21.csv")
+```
+
+## Health metadata overview
+
+### Questionnaire taken every three months
+
+Distribution of the boolean fields in the questionnaire
+
+```{r, warning=FALSE, message=FALSE, fig.height=7}
+# select the bool fields from the field_data description
+fields_bool <- field_data %>% filter(data_type=="bool") %>% select(field) %>% pull
+TMonths_bool <- TMonths_data %>% select(Family_ID, any_of(fields_bool))
+
+# get the counts for true, false and NA answers for each questions
+TMonths_bool_long <- TMonths_bool %>% pivot_longer(!Family_ID, names_to="question", values_to="answers")
+TMonths_bool_counts <- TMonths_bool_long %>% group_by(question, answers) %>% tally()
+
+# plot the distribution
+plotbools <- TMonths_bool_counts %>% ggplot(aes(x=question, y=n, fill=answers)) +
+  geom_bar(stat="identity")+
+  coord_flip() +
+  theme(legend.position="bottom",
+        text = element_text(size=10))
+
+plotbools
+
+```
+```{r, warning=FALSE, message=FALSE, fig.height=7}
+# select the int fields from the field_data description
+fields_int <- field_data %>% filter(data_type=="int") %>% select(field) %>% pull
+TMonths_int <- TMonths_data %>% select(Family_ID, any_of(fields_int))
+
+# get the counts for true, false and NA answers for each questions
+TMonths_int_long <- TMonths_int %>% pivot_longer(!Family_ID, names_to="question", values_to="answers")
+TMonths_int_counts <- TMonths_int_long %>% group_by(question, answers) %>% tally()
+
+# plot the distribution
+plotbools <- TMonths_int_counts %>% ggplot(aes(x=question, y=n, fill=answers)) +
+  geom_bar(stat="identity")+
+  coord_flip() +
+  theme(legend.position="bottom",
+        text = element_text(size=10))
+
+plotbools
+
+```
+
+```{r, warning=FALSE, message=FALSE, fig.height=7}
+# select the categorical fields from the field_data description
+fields_categorical <- field_data %>% filter(data_type=="categorical") %>% select(field) %>% pull
+TMonths_categorical <- TMonths_data %>% select(Family_ID, any_of(fields_categorical))
+
+# get the counts for true, false and NA answers for each questions
+TMonths_categorical_long <- TMonths_categorical %>% pivot_longer(!Family_ID, names_to="question", values_to="answers")
+TMonths_categorical_counts <- TMonths_categorical_long %>% group_by(question, answers) %>% tally()
+
+# plot the distribution
+plotbools <- TMonths_categorical_counts %>% ggplot(aes(x=question, y=n, fill=answers)) +
+  geom_bar(stat="identity")+
+  coord_flip() +
+  theme(legend.position="bottom",
+        text = element_text(size=10))
+
+plotbools
+
+```
+

@@ -1,0 +1,65 @@
+---
+title: "Trend"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+This script is to plot the trend of usable field overtime.
+
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+# loads the libraries
+library(tidyverse)
+library(knitr)
+library(dplyr)
+library(reshape2)
+
+# import tables of the questionnaires and the fields informations
+field_data <- read_csv("../Health_data/fields_ifusable.csv")
+TMonths_data <- read_csv("../Health_data/Health_3months_nonOutliers_09.04.21.csv")
+Reg_data <- read_csv("../Health_data/Health_Reg_nonOutliers_09.04.21.csv")
+```
+
+Usable fields include all int fields and ID fields.
+
+For the plot, use valid_From field as the x and the chosen field as the y
+
+```{r}
+field_3M <- field_data %>% filter(Usable=="TRUE" ,file_name=="3Months") %>% select(field) %>% pull
+field_Re <- field_data %>% filter(Usable=="TRUE" ,file_name=="Regular") %>% select(field) %>% pull
+
+TMonths_use <- TMonths_data %>% select(Family_ID, any_of(field_3M))
+Reg_use <- Reg_data %>% select(Family_ID, any_of(field_Re))
+```
+
+```{r}
+plotbool <- TMonths_use %>% ggplot(aes(x=Valid_to, y=inf_GeneralHealth)) + 
+  geom_smooth() +
+  labs(x='Age in weeks')
+
+plotbool
+```
+
+Here use for loop to plot each fields
+
+```{r}
+for (item in field_3M) {
+  plotbool <- TMonths_use %>% ggplot(aes_string(x="Valid_to", y=item)) +
+    geom_smooth()+
+    labs(x="Age in weeks")
+  print(plotbool)
+}
+```
+
+Here is the Reg data
+
+```{r}
+for (item in field_Re) {
+  plotbool <- Reg_use %>% ggplot(aes_string(x="Valid_to", y=item)) +
+    geom_smooth()+
+    labs(x="Age in weeks")
+  print(plotbool)
+}
+```
+

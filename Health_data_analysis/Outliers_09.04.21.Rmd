@@ -1,0 +1,63 @@
+---
+title: "Outliers-health metadata"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+# loads the libraries
+library(tidyverse)
+library(knitr)
+library(dplyr)
+library(reshape2)
+
+# import tables of the questionnaires and the fields informations
+field_data <- read_csv("../Health_data/fields_extracted.csv")
+TMonths_data <- read_csv("../Health_data/Health_3months_18.03.21.csv")
+Reg_data <- read_csv("../Health_data/Health_Reg_18.03.21.csv")
+```
+
+for all int data, I want to plot the x--range of data, y--frequency of data
+
+```{r}
+# select the int fields from the field_data description
+fields_int_3M <- field_data %>% filter(data_type=="int", file_name=="3Months") %>% select(field) %>% pull
+fields_int_re <- field_data %>% filter(data_type=="int", file_name=="Regular") %>% select(field) %>% pull
+
+TMonths_int <- TMonths_data %>% select(Family_ID, any_of(fields_int_3M))
+Reg_int <- Reg_data %>% select(Family_ID, any_of(fields_int_re))
+```
+Here I used a for loop to plot each int data
+```{r}
+
+for (i in 1:13) {
+  n <- TMonths_int %>% select(fields_int_3M[i]) %>% t()
+  hist(n, freq = T, xlab = fields_int_3M[i], main = fields_int_3M[i])
+}
+```
+14th inf_NbColicHospitalization have no valid data (1 for 0 and rest are NA)
+
+here is the rest
+```{r}
+for (i in 15:29) {
+  n <- TMonths_int %>% select(fields_int_3M[i]) %>% t()
+  hist(n, freq = T, xlab = fields_int_3M[i], main = fields_int_3M[i])
+}
+```
+for inf_SeriousIllness, there seems some misunderstand. Some parents consider the general health is 100, but the child
+did have some disease which might be cured later. And they consider the serious illness scale is 0(which means they
+believe the child had serous illness.)
+
+
+here is the reg_data
+
+```{r}
+
+for (i in 1:length(fields_int_re)) {
+  n <- Reg_int %>% select(fields_int_re[i]) %>% t()
+  hist(n, freq = T, xlab = fields_int_re[i], main = fields_int_re[i])
+}
+```
+
