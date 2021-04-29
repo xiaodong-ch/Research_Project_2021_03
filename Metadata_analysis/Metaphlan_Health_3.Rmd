@@ -1,0 +1,138 @@
+---
+title: "Metaphlan_Health_3"
+output: html_notebook
+---
+This scrip merged health data with metaphlan3 data
+
+```{r echo=FALSE, warning=FALSE}
+# create Phylloseq object
+library(ape)
+library(dplyr)
+library(phyloseq)
+library(tidyverse)
+library(microbiome)
+library(vegan)
+
+# import tables and format for PhylloSeq
+metaphlan <- read_tsv("../Metaphlan3/merged_abundance_table.txt") 
+# select the species level information
+metaphlan_s <- metaphlan %>% separate(clade_name,  #separate clade_name into 7 columns
+                                    into=c("kingdom","Phylum","class","order","family","genera","species"), 
+                                    sep="\\|") %>%
+                            separate(NCBI_tax_id, #separete NCBI_tax_id into 7 columns
+                                    into=c("Tax_kingdom","Tax_Phylum","Tax_class","Tax_order","Tax_family","Tax_genera","TaxID"), 
+                                    sep="\\|") %>%
+                            mutate(kingdom=str_replace(kingdom, "k__", "")) %>%
+                            mutate(Phylum=ifelse(kingdom=="Unknown", "Unknown", str_replace(Phylum, "p__", ""))) %>%
+                            mutate(class=ifelse(kingdom=="Unknown", "Unknown", str_replace(class, "c__", ""))) %>%
+                            mutate(order=ifelse(kingdom=="Unknown", "Unknown", str_replace(order, "o__", ""))) %>%
+                            mutate(family=ifelse(kingdom=="Unknown", "Unknown", str_replace(family, "f__", ""))) %>%
+                            mutate(genera=ifelse(kingdom=="Unknown", "Unknown", str_replace(genera, "g__", ""))) %>%
+                            mutate(species=ifelse(kingdom=="Unknown", "Unknown", str_replace(species, "s__", ""))) %>%
+                            mutate(TaxID=ifelse(kingdom=="Unknown", "-1", TaxID)) %>%
+                            #columns from clade_name: keep only the tax-name and trim the "k__" prefix
+                            filter(!is.na(species))
+                            #filter out the rows that have no species information.
+
+# remove samples with less than 10 taxonomic assignments
+nonzero <- function(x) sum(x != 0)
+meta_exclude <- metaphlan_s %>% summarise(across(starts_with("Hel"), nonzero)) %>% 
+  pivot_longer(everything(),names_to="samples", values_to="nb_tax") %>%
+  filter(nb_tax<10) %>% select(samples) %>%
+  pull()
+
+metaphlan_s <- metaphlan_s %>% select(- all_of(meta_exclude))
+
+## create TaxTable
+taxMat <-  metaphlan_s %>% select(TaxID, kingdom, Phylum, class, order, family, genera, species) 
+taxMat <- taxMat %>% tibble::column_to_rownames("TaxID")
+TAX = tax_table(as.matrix(taxMat))
+
+## create countTable
+countMat <- metaphlan_s %>% select(-kingdom, -Phylum, -class, -order, -family, -genera, -species, 
+                                   -Tax_kingdom, -Tax_Phylum, -Tax_class, -Tax_order, -Tax_family, -Tax_genera)
+countMat <- countMat %>% tibble::column_to_rownames("TaxID")
+OTU = otu_table(as.matrix(countMat), taxa_are_rows = TRUE)
+```
+
+Now we have TAX OTU but no SAMPLE.
+
+```{r echo=FALSE}
+## sample description file
+sampleMat <- read_csv("../Metaphlan3/sample_table_12.04.21.csv")
+health3m_meta <- read.csv("../Health_data/Health_3months_nonOutliers_ABscaled_17.04.21.csv")
+fieldsinfo <- read.csv("../Health_data/fields_usable_21.04.15.csv")
+
+#add only certain fields from 3M into sample description file
+fieldsAB <- fieldsinfo %>% filter(Scale=="AB") %>% select(field) %>% pull
+health3m <- health3m_meta %>% select(Family_ID,sample_type,Valid_From,Valid_to,any_of(fieldsAB))
+
+sample_health_Mat <- left_join(sampleMat, health3m, by = c("Family_ID", "sample_type"))
+```
+To delete the rows with the same familyID and time code,
+we need to create a list contain all suspect rows by Valid_from/to
+and a list without any suspect rows called cleaned list.
+Some of these rows are not wanted but some are misfiltered for having the same Valid_from/to
+Then with anti_join we are able to gain a new list having misfiltered rows
+Finally, we can merge the misfiltered rows with the cleaned list by full_join
+
+(This step is a little complex because I thought some family have two B3 valid from 39 and 52 respectly, but some family may have only one B3 valid from 39 or 52. If drop all B3 valid from 39 then families have only one B3 will be cleaned by mistake. But the truth is there is no such a family...)
+```{r}
+#Valid_from for each time code
+#B1: -1 or 0
+#B2 has no repeat rows: 26
+#B3: 52
+#B4:has no repeat rows: 65
+#B5: 91
+#no valid health data for B6 B7 B8 B9 F M
+clean_sample <- sample_health_Mat %>% filter(Valid_From %in% c(-1,0,26,52,65,91))
+suspect_sample <- sample_health_Mat %>% filter(!(Valid_From %in% c(-1,0,26,52,65,91)))
+mis_sample <- anti_join(suspect_sample,clean_sample, by = c("Family_ID", "sample_type"))
+sample_health_3 <- full_join(clean_sample, mis_sample)
+
+#creat SAMPLE
+sample_health3 <- sample_health_3 %>%tibble::column_to_rownames("sample_ID")
+SAMPLE = sample_data(as.data.frame(sample_health3))
+
+physeq = phyloseq(OTU, TAX, SAMPLE)
+```
+```{r}
+# Define detection and prevalence thresholds to filter out rare taxa
+physeq.core <- core(physeq, detection = 0.1/100, prevalence = 1/100)
+
+set.seed(4235421)
+ord <- ordinate(physeq.core, "MDS", "bray")
+
+# Illustrate sample similarities with PCoA (NMDS)
+plot_ordination(physeq.core, ord, color = "familly_WorriedHealth") +
+  geom_point(size = 5)
+
+plot_ordination(physeq.core, ord, color = "inf_DiaperRashIntensity") +
+  geom_point(size = 5)
+
+plot_ordination(physeq.core, ord, color = "inf_FoldingRashIntensity") +
+  geom_point(size = 5)
+
+plot_ordination(physeq.core, ord, color = "inf_GeneralHealth") +
+  geom_point(size = 5)
+
+plot_ordination(physeq.core, ord, color = "inf_HealthSameAge") +
+  geom_point(size = 5)
+
+plot_ordination(physeq.core, ord, color = "inf_InfectiousDisease") +
+  geom_point(size = 5)
+
+plot_ordination(physeq.core, ord, color = "inf_SeriousIllness") +
+  geom_point(size = 5)
+
+plot_ordination(physeq.core, ord, color = "inf_SkinStatus") +
+  geom_point(size = 5)
+```
+```{r}
+pseq.general <- subset_samples(physeq, !is.na(inf_InfectiousDisease)) %>%
+   aggregate_taxa(level = "Phylum")
+
+p <- plot_composition(pseq.general, group_by = "inf_InfectiousDisease")
+print(p)
+```
+
