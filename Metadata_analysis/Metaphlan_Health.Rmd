@@ -1,0 +1,190 @@
+---
+title: "Metaphlan_Health_3"
+output: html_notebook
+---
+This scrip merged health data with metaphlan3 data
+
+```{r warning=FALSE, include=FALSE}
+# create Phylloseq object
+library(ape)
+library(dplyr)
+library(phyloseq)
+library(tidyverse)
+library(microbiome)
+library(vegan)
+
+# import tables and format for PhylloSeq
+metaphlan <- read_tsv("../Metaphlan3/merged_abundance_table.txt") 
+# select the species level information
+metaphlan_s <- metaphlan %>% separate(clade_name,  #separate clade_name into 7 columns
+                                    into=c("kingdom","Phylum","class","order","family","genera","species"), 
+                                    sep="\\|") %>%
+                            separate(NCBI_tax_id, #separete NCBI_tax_id into 7 columns
+                                    into=c("Tax_kingdom","Tax_Phylum","Tax_class","Tax_order","Tax_family","Tax_genera","TaxID"), 
+                                    sep="\\|") %>%
+                            mutate(kingdom=str_replace(kingdom, "k__", "")) %>%
+                            mutate(Phylum=ifelse(kingdom=="Unknown", "Unknown", str_replace(Phylum, "p__", ""))) %>%
+                            mutate(class=ifelse(kingdom=="Unknown", "Unknown", str_replace(class, "c__", ""))) %>%
+                            mutate(order=ifelse(kingdom=="Unknown", "Unknown", str_replace(order, "o__", ""))) %>%
+                            mutate(family=ifelse(kingdom=="Unknown", "Unknown", str_replace(family, "f__", ""))) %>%
+                            mutate(genera=ifelse(kingdom=="Unknown", "Unknown", str_replace(genera, "g__", ""))) %>%
+                            mutate(species=ifelse(kingdom=="Unknown", "Unknown", str_replace(species, "s__", ""))) %>%
+                            mutate(TaxID=ifelse(kingdom=="Unknown", "-1", TaxID)) %>%
+                            #columns from clade_name: keep only the tax-name and trim the "k__" prefix
+                            filter(!is.na(species))
+                            #filter out the rows that have no species information.
+
+# remove samples with less than 10 taxonomic assignments
+nonzero <- function(x) sum(x != 0)
+meta_exclude <- metaphlan_s %>% summarise(across(starts_with("Hel"), nonzero)) %>% 
+  pivot_longer(everything(),names_to="samples", values_to="nb_tax") %>%
+  filter(nb_tax<10) %>% select(samples) %>%
+  pull()
+
+metaphlan_s <- metaphlan_s %>% select(- all_of(meta_exclude))
+
+## create TaxTable
+taxMat <-  metaphlan_s %>% select(TaxID, kingdom, Phylum, class, order, family, genera, species) 
+taxMat <- taxMat %>% tibble::column_to_rownames("TaxID")
+TAX = tax_table(as.matrix(taxMat))
+
+## create countTable
+countMat <- metaphlan_s %>% select(-kingdom, -Phylum, -class, -order, -family, -genera, -species, 
+                                   -Tax_kingdom, -Tax_Phylum, -Tax_class, -Tax_order, -Tax_family, -Tax_genera)
+countMat <- countMat %>% tibble::column_to_rownames("TaxID")
+OTU = otu_table(as.matrix(countMat), taxa_are_rows = TRUE)
+```
+
+Now we have TAX OTU but no SAMPLE.
+
+```{r include=FALSE}
+## sample description file
+sampleMat <- read_csv("../Metaphlan3/sample_table_12.04.21.csv")
+
+health_3m_meta <- read.csv("../Health_data/Health_3months_nonOutliers_ABscaled_17.04.21.csv")
+health_Reg_meta <- read.csv("../Health_data/Health_Reg_nonOutliers_ABscaled_17.04.21.csv")
+
+fieldsinfo <- read.csv("../Health_data/fields_usable_21.04.15.csv")
+
+#Here I want to add all fields except "text" type fields from health_data into SAMPLE
+#For late analysis, use info from 'fieldsinfo' to cluster the fields groups
+
+fields_text <- fieldsinfo %>% filter(data_type=="text") %>% select(field) %>% pull
+health_3m <- health_3m_meta %>% select(!any_of(fields_text))
+health_Reg <- health_Reg_meta %>% select(!any_of(fields_text))
+
+sample_health_3m <- left_join(sampleMat, health_3m, by = c("Family_ID", "sample_type"))
+sample_health_Reg <- left_join(sampleMat, health_Reg, by = c("Family_ID", "sample_type"))
+```
+
+#Merge 3M data
+There are two extra rows for Hel178xB8 and Hel126xB9.
+The number of obs. of sample_health_3m_Mat should be the same as sampleMat(374)
+```{r include=FALSE}
+#Valid_from for B8 and B9
+#B8: 52(keep) 65
+#B9: 78(keep) 91
+sample_health_3m_Mat <- sample_health_3m %>% filter(!(Valid_From %in% c(65,91)))
+```
+
+#Merge Reg data
+To delete the rows with the same familyID and time code,
+we need to create a list contain all suspect rows by Valid_from/to
+and a list without any suspect rows called cleaned list.
+
+Some not wanted rows might remain in cleaned list. And some are misfiltered for having the same Valid_from/to.
+
+Then with anti_join we are able to gain a new list having misfiltered rows.
+
+Finally, we can merge the misfiltered rows with the cleaned list by full_join.
+
+The number of obs. of sample_health_Reg_Mat should be the same as sampleMat(374)
+
+Note: in Reg_data, there are more than 2 B1 for one family.
+And we need to treat mis_sample as the samole_health_Reg with the valide_from of secondary priority.
+Thus the code here is not perfect but works for this job.
+
+```{r include=FALSE}
+#Valid_from for each time code
+#Priority B1 B2 B3 B4 B5 B6 B7 B8 B9 F M
+#1st      2 5 8 11 22 30 43 48 NA NA NA
+#2nd      1 4 7 10 20 26 39 NA NA NA NA
+#3rd      0 3 6 9 16 24 35 NA NA NA NA
+
+clean_sample <- sample_health_Reg %>% filter(Valid_From %in% c(2,5,8,11,22,30,43,48))
+suspect_sample <- sample_health_Reg %>% filter(!(Valid_From %in% c(2,5,8,11,22,30,43,48)))
+mis_sample <- anti_join(suspect_sample,clean_sample, by = c("Family_ID", "sample_type"))
+
+#filter mis_sample with 2nd priority valid_from
+mis_clean <- mis_sample %>% filter(Valid_From %in% c(1, 4, 7, 10, 20, 26, 39))
+mis_sus <- mis_sample %>% filter(!Valid_From %in% c(1, 4, 7, 10, 20, 26, 39))
+mis_mis <- anti_join(mis_sus, mis_clean, by = c("Family_ID", "sample_type") )
+mis_filtered <- full_join(mis_clean, mis_mis)
+
+sample_health_Reg_Mat <- full_join(clean_sample, mis_filtered)
+#the number of obs. of sample_health_Reg_Mat is 376, which means there are two extra rows.
+#The extra rows can be found manually: "Hel655xB5" "Hel655xB5"
+#Family 655 have three B5 valid from 18,13,12
+#here use valid_from == 18
+sample_health_Reg_Mat <- sample_health_Reg_Mat %>% filter(!(Family_ID=="Perhe655" & Valid_From %in% c(13,12)))
+
+```
+
+#SAMPLE
+Now merge 3m_Mat and Reg_Mat to creat SAMPLE
+```{r}
+#Merge both 3m_Mat and Reg_Mat
+sample_health <- left_join(sample_health_3m_Mat, sample_health_Reg_Mat, by = c("Family_ID", "sample_type","sample_ID","file_name","inf_DeliveryMode", "Run_ID"))
+
+#creat SAMPLE
+sample_health <- sample_health %>% tibble::column_to_rownames("sample_ID")
+SAMPLE = sample_data(as.data.frame(sample_health))
+
+physeq = phyloseq(OTU, TAX, SAMPLE)
+```
+
+#Plot
+
+```{r}
+#Subset infant samples
+#Define detection and prevalence thresholds to filter out rare taxa
+pseq.infant <- subset_samples(physeq, !(sample_type %in% c("M","F"))) %>% core(detection = 0.1/100, prevalence = 1/100)
+
+set.seed(4235421)
+ord <- ordinate(pseq.infant, "MDS", "bray")
+```
+
+bool variables
+```{r}
+# Illustrate sample similarities with PCoA (NMDS)
+fields_bool <- fieldsinfo %>% filter(data_type=="bool") %>% filter(!(field %in% c("inf_HasDiagPollenAllergies"))) %>% select(field) %>% pull
+
+for (item in fields_bool) {
+  p <- plot_ordination(pseq.infant, ord, color = item) +
+    geom_point(size = 5)
+  print(p)
+}
+```
+
+categorical and AB scaled variables
+```{r}
+fields_cate <- fieldsinfo %>% filter(data_type=="categorical" | Scale=="AB") %>% select(field) %>% pull
+
+for (item in fields_cate) {
+  p <- plot_ordination(pseq.infant, ord, color = item) +
+    geom_point(size = 5)
+  print(p)
+}
+```
+
+
+
+```{r}
+
+pseq.general <- subset_samples(physeq, !is.na(inf_InfectiousDisease)) %>%
+   aggregate_taxa(level = "Phylum")
+
+p <- plot_composition(pseq.general, group_by = "inf_InfectiousDisease")
+print(p)
+```
+
