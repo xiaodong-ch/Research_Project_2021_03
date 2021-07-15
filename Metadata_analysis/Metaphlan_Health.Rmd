@@ -4,6 +4,8 @@ output: html_notebook
 ---
 This scrip merged health data with metaphlan3 data
 
+#Create Physeq
+##TAX and OTU
 ```{r warning=FALSE, include=FALSE}
 # create Phylloseq object
 library(ape)
@@ -12,6 +14,7 @@ library(phyloseq)
 library(tidyverse)
 library(microbiome)
 library(vegan)
+library(ggplot2)
 
 # import tables and format for PhylloSeq
 metaphlan <- read_tsv("../Metaphlan3/merged_abundance_table.txt") 
@@ -45,18 +48,18 @@ metaphlan_s <- metaphlan_s %>% select(- all_of(meta_exclude))
 
 ## create TaxTable
 taxMat <-  metaphlan_s %>% select(TaxID, kingdom, Phylum, class, order, family, genera, species) 
-taxMat <- taxMat %>% tibble::column_to_rownames("TaxID")
+taxMat <- taxMat %>% tibble::column_to_rownames("species")
 TAX = tax_table(as.matrix(taxMat))
 
 ## create countTable
-countMat <- metaphlan_s %>% select(-kingdom, -Phylum, -class, -order, -family, -genera, -species, 
+countMat <- metaphlan_s %>% select(-kingdom, -Phylum, -class, -order, -family, -genera, -TaxID, 
                                    -Tax_kingdom, -Tax_Phylum, -Tax_class, -Tax_order, -Tax_family, -Tax_genera)
-countMat <- countMat %>% tibble::column_to_rownames("TaxID")
+countMat <- countMat %>% tibble::column_to_rownames("species")
 OTU = otu_table(as.matrix(countMat), taxa_are_rows = TRUE)
 ```
 
 Now we have TAX OTU but no SAMPLE.
-
+##Create SAMPLE
 ```{r include=FALSE}
 ## sample description file
 sampleMat <- read_csv("../Metaphlan3/sample_table_12.04.21.csv")
@@ -77,7 +80,7 @@ sample_health_3m <- left_join(sampleMat, health_3m, by = c("Family_ID", "sample_
 sample_health_Reg <- left_join(sampleMat, health_Reg, by = c("Family_ID", "sample_type"))
 ```
 
-#Merge 3M data
+###Merge 3M data
 There are two extra rows for Hel178xB8 and Hel126xB9.
 The number of obs. of sample_health_3m_Mat should be the same as sampleMat(374)
 ```{r include=FALSE}
@@ -87,7 +90,7 @@ The number of obs. of sample_health_3m_Mat should be the same as sampleMat(374)
 sample_health_3m_Mat <- sample_health_3m %>% filter(!(Valid_From %in% c(65,91)))
 ```
 
-#Merge Reg data
+###Merge Reg data
 To delete the rows with the same familyID and time code,
 we need to create a list contain all suspect rows by Valid_from/to
 and a list without any suspect rows called cleaned list.
@@ -130,41 +133,114 @@ sample_health_Reg_Mat <- sample_health_Reg_Mat %>% filter(!(Family_ID=="Perhe655
 
 ```
 
-#SAMPLE
+###Merge 3m and Reg
 Now merge 3m_Mat and Reg_Mat to creat SAMPLE
 ```{r}
 #Merge both 3m_Mat and Reg_Mat
 sample_health <- left_join(sample_health_3m_Mat, sample_health_Reg_Mat, by = c("Family_ID", "sample_type","sample_ID","file_name","inf_DeliveryMode", "Run_ID"))
 
-#creat SAMPLE
+#creat pre-SAMPE table
 sample_health <- sample_health %>% tibble::column_to_rownames("sample_ID")
-SAMPLE = sample_data(as.data.frame(sample_health))
+```
 
+###Filter out NA fields
+There are some fields contain too many NA values. Here plot bool, AB and categorical fields to filter out these fields
+```{r}
+#bool
+fields_bool <- fieldsinfo %>% filter(data_type=="bool") %>% select(field) %>% pull
+sample_health_bool <- sample_health %>% select(Family_ID, any_of(fields_bool))
+
+# get the counts for true, false and NA answers for each questions
+sample_health_bool_long <- sample_health_bool %>% pivot_longer(!Family_ID, names_to="question", values_to="answers")
+sample_health_bool_counts <- sample_health_bool_long %>% group_by(question, answers) %>% tally()
+
+# plot the distribution
+plotbools <- sample_health_bool_counts %>% ggplot(aes(x=question, y=n, fill=answers)) +
+  geom_bar(stat="identity")+
+  coord_flip() +
+  theme(legend.position="bottom",
+        text = element_text(size=10))
+
+plotbools
+
+#From the plot, we donot want the field with more than 330 NA values
+boolNA <- sample_health_bool_counts %>% filter(!(answers %in% c("TRUE","FALSE"))) %>% filter(n > 300) %>% select(question) %>% pull
+```
+```{r}
+#cate and AB
+fields_cate <- fieldsinfo %>% filter(data_type=="categorical" | Scale=="AB") %>% select(field) %>% pull
+
+sample_health_cate <- sample_health %>% select(Family_ID, any_of(fields_cate))
+
+# get the counts for true, false and NA answers for each questions
+sample_health_cate_long <- sample_health_cate %>% pivot_longer(!Family_ID, names_to="question", values_to="answers")
+sample_health_cate_counts <- sample_health_cate_long %>% group_by(question, answers) %>% tally()
+
+# plot the distribution
+plotcate <- sample_health_cate_counts %>% ggplot(aes(x=question, y=n, fill=answers)) +
+  geom_bar(stat="identity")+
+  coord_flip() +
+  theme(legend.position="bottom",
+        text = element_text(size=10))
+
+plotcate
+
+#From the plot, we don't want the field with more than 300 NA values
+cateNA <- sample_health_cate_counts %>% filter(is.na(answers)) %>% filter(n > 300) %>% select(question) %>% pull
+```
+
+###Creat SAMPLE and complete physeq
+```{r}
+sample_health <- sample_health %>% select(!any_of(boolNA)) %>% select(!any_of(cateNA))
+SAMPLE = sample_data(as.data.frame(sample_health))
 physeq = phyloseq(OTU, TAX, SAMPLE)
 ```
 
+
+
+
 #Plot
 
+##PCoA
+###overview all infant sample with all sample_type
 ```{r}
 #Subset infant samples
 #Define detection and prevalence thresholds to filter out rare taxa
-pseq.infant <- subset_samples(physeq, !(sample_type %in% c("M","F"))) %>% core(detection = 0.1/100, prevalence = 1/100)
+pseq.infant <- subset_samples(physeq, !(sample_type %in% c("F","M"))) %>% core(detection = 0.1/100, prevalence = 1/100)
 
 set.seed(4235421)
 ord <- ordinate(pseq.infant, "MDS", "bray")
 ```
 
+```{r}
+#basic descriptions
+plot_ordination(pseq.infant, ord, color = "sample_type") +
+  geom_point(size = 5)
+
+plot_ordination(pseq.infant, ord, color = "inf_DeliveryMode") +
+  geom_point(size = 5)
+
+plot_ordination(pseq.infant, ord, color = "Run_ID") +
+  geom_point(size = 5)
+```
+
+
 bool variables
 ```{r}
 # Illustrate sample similarities with PCoA (NMDS)
-fields_bool <- fieldsinfo %>% filter(data_type=="bool") %>% filter(!(field %in% c("inf_HasDiagPollenAllergies"))) %>% select(field) %>% pull
+#%>% filter(!(field %in% c("inf_HasDiagPollenAllergies")))
+#%>% filter(!(field %in% boolNA))
+fields_bool <- fieldsinfo %>% filter(data_type=="bool") %>% filter(!(field %in% boolNA)) %>% select(field) %>% pull
 
 for (item in fields_bool) {
   p <- plot_ordination(pseq.infant, ord, color = item) +
-    geom_point(size = 5)
-  print(p)
+    geom_point(size = 5) +
+    labs(title = item)
+  pbool <- try(print(p), silent = T)
+  if (grepl("Error", pbool)) {print(item)}
+  else {print(p)}
 }
-```
+``` 
 
 categorical and AB scaled variables
 ```{r}
@@ -176,15 +252,127 @@ for (item in fields_cate) {
   print(p)
 }
 ```
+##Plot Function
+for PCoA, there might be many subphyseq and variables.
+Here is a function to do this
+```{r}
+phy.pcoa <- function(dataset, fields) {
+  set.seed(4235421)
+  ord <- ordinate(dataset, "MDS", "bray")
+  for (item in fields) {
+    p <- plot_ordination(dataset, ord, color = item) +
+      geom_point(size = 5)
+    pbool <- try(print(p), silent = T)
+    if (grepl("Error", pbool)) {print(item)}
+    else {print(p)}
+    }
+}
+```
+```{r}
+#B1
+pseq.pcoa <- subset_samples(physeq, (sample_type %in% c("B5"))) %>% core(detection = 0.1/100, prevalence = 1/100)
+
+phy.pcoa(pseq.pcoa, c("inf_HadVaccine"))
+```
+
+#PERMANOVA
+```{r}
+#here generate the subseq
+# %>% subset_samples(!is.na(colorname.str))
+
+colorname.str <- "inf_RegDefecation"
+
+pseq.infant <- subset_samples(physeq, !sample_type %in% c("F","M")) %>% subset_samples(!is.na(get(colorname.str)))
+
+pseq.rel <- pseq.infant
 
 
+#dram landscape plot
+pseq.rel <- microbiome::transform(pseq.rel, "compositional")
+otu <- abundances(pseq.rel)
+meta <- meta(pseq.rel)
 
+p <- plot_landscape(pseq.rel, method = "NMDS", distance = "bray", col = colorname.str, size = 5)
+print(p)
+```
+```{r}
+#p-value
+permanova <- adonis(t(otu) ~ inf_RegDefecation,
+               data = meta, permutations=99, method = "bray")
+print(as.data.frame(permanova$aov.tab)[1, "Pr(>F)"])
+
+#homogeneity retest
+dist <- vegdist(t(otu))
+
+anova(betadisper(dist, meta$inf_RegDefecation))[1,"Pr(>F)"]
+```
+```{r}
+#Top taxa
+bott <- gsub(" ", "",paste(colorname.str,"1"))
+coef <- coefficients(permanova)[bott,]
+top.coef <- coef[rev(order(abs(coef)))[1:20]]
+par(mar = c(3, 14, 2, 1))
+title <- paste(colorname.str,"Top taxa")
+barplot(sort(top.coef), horiz = T, las = 1, main = title)
+```
+
+Here is a for loop to calculate p-values of all variables.
 ```{r}
 
-pseq.general <- subset_samples(physeq, !is.na(inf_InfectiousDisease)) %>%
-   aggregate_taxa(level = "Phylum")
+fields_sample <- fieldsinfo %>% filter(data_type %in% c("bool","categorical") | Scale=="AB") %>% filter(!(field %in% boolNA)) %>% filter(!(field %in% cateNA)) %>% select(field) %>% pull
 
-p <- plot_composition(pseq.general, group_by = "inf_InfectiousDisease")
-print(p)
+pvalue.frame <- data.frame(variables=c(), p_value=c(), homogeneity_pvalue=c())
+
+for (item in fields_sample) {
+  pseq.pvalue <- subset_samples(physeq, !sample_type %in% c("F","M")) %>% subset_samples(!is.na(get(item))) %>% core(detection = 0.1/100, prevalence = 1/100)
+  pseq.rel <- microbiome::transform(pseq.pvalue, "compositional")
+  otu <- abundances(pseq.rel)
+  meta <- meta(pseq.rel)
+  permanova <- try(adonis(t(otu) ~ get(item),data = meta, permutations=99, method = "bray"),silent = T)
+  if ('try-error' %in% class(permanova)) {
+    print(c(item, "Error"))
+    next
+  } else {
+    #pvalue
+    pvalue <- as.data.frame(permanova$aov.tab)[1, "Pr(>F)"]
+    dist <- vegdist(t(otu))
+    
+    #homogeneity retest
+    hpvalue <- anova(betadisper(dist, meta[[item]]))[1,"Pr(>F)"]
+    newrow <- data.frame(variables=item, p_value=pvalue, homogeneity_pvalue=hpvalue)
+    pvalue.frame <- rbind(pvalue.frame,newrow)
+    
+    #plot
+    p <- plot_landscape(pseq.rel, method = "NMDS", distance = "bray", col = item, size = 5) +
+      labs(title = paste(item,pvalue))
+    print(p)
+  }
+}
+
+```
+
+here is a for loop to plot top taxa
+```{r}
+
+fields_pvalue <- pvalue.frame %>% filter(p_value <0.05) %>% select(variables) %>% pull
+for (item in fields_sample) {
+  pseq.pvalue <- subset_samples(physeq, !sample_type %in% c("F","M")) %>% subset_samples(!is.na(get(item))) %>% core(detection = 0.1/100, prevalence = 1/100)
+  pseq.rel <- microbiome::transform(pseq.pvalue, "compositional")
+  otu <- abundances(pseq.rel)
+  meta <- meta(pseq.rel)
+  permanova <- try(adonis(t(otu) ~ get(item),data = meta, permutations=99, method = "bray"),silent = T)
+  if ('try-error' %in% class(permanova)) {
+    print(c(item, "Error"))
+    next
+  } else {
+    #taxa
+    coef <- coefficients(permanova)[2,]
+    top.coef <- coef[rev(order(abs(coef)))[1:20]]
+    par(mar = c(3, 14, 2, 1))
+    pvalue <- as.data.frame(permanova$aov.tab)[1, "Pr(>F)"]
+    title <- paste(item,"pvalue=",pvalue,"--Top taxa")
+    barplot(sort(top.coef), horiz = T, las = 1, main = title)
+  }
+}
 ```
 
