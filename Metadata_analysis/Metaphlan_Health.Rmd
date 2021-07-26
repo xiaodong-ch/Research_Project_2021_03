@@ -81,7 +81,7 @@ sample_health_Reg <- left_join(sampleMat, health_Reg, by = c("Family_ID", "sampl
 ```
 
 ###Merge 3M data
-There are two extra rows for Hel178xB8 and Hel126xB9.
+
 The number of obs. of sample_health_3m_Mat should be the same as sampleMat(374)
 ```{r include=FALSE}
 #Valid_from for B8 and B9
@@ -126,10 +126,10 @@ mis_filtered <- full_join(mis_clean, mis_mis)
 
 sample_health_Reg_Mat <- full_join(clean_sample, mis_filtered)
 #the number of obs. of sample_health_Reg_Mat is 376, which means there are two extra rows.
-#The extra rows can be found manually: "Hel655xB5" "Hel655xB5"
-#Family 655 have three B5 valid from 18,13,12
+#The extra rows can be found manually
+#Family *** have three B5 valid from 18,13,12
 #here use valid_from == 18
-sample_health_Reg_Mat <- sample_health_Reg_Mat %>% filter(!(Family_ID=="Perhe655" & Valid_From %in% c(13,12)))
+sample_health_Reg_Mat <- sample_health_Reg_Mat %>% filter(!(Family_ID=="***" & Valid_From %in% c(13,12)))
 
 ```
 
