@@ -1,0 +1,36 @@
+---
+title: "Overview of metaphlan3 data"
+output: html_notebook
+---
+
+Try to plot the merged_abundance_table_specises into a heatmap format.
+To see the basic character of the specises_data
+
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+library(tidyverse)
+library(knitr)
+library(dplyr)
+library(reshape2)
+
+meta3 <- read.table("../Metaphlan3/merged_abundance_table_species.txt", header = T)
+
+```
+
+here is the code for heatmap
+
+```{r}
+rowname <- meta3$species
+meta3_hmap <- meta3 %>% select(-(NCBI_tax_id:species))
+rownames(meta3_hmap) <- rowname
+```
+
+Try to usedifferent sample_type to plot the heatmap
+Note: turn the meta3_hmap into matrix only in heatmap() function
+otherwise the select() function is not work
+
+```{r}
+heatbool <- meta3_hmap %>% select(contains("B1")) %>% as.matrix() %>% heatmap(scale = "column", Colv = NA, Rowv = NA)
+
+heatbool
+```
+
