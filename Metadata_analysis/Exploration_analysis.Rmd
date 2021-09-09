@@ -1,0 +1,151 @@
+---
+title: "Preliminary Exploration Metaphlan3 dataset"
+output: html_notebook
+---
+
+
+```{r}
+# create Phylloseq object
+library(ape)
+library(dplyr)
+library(phyloseq)
+library(tidyverse)
+library(microbiome)
+library(vegan)
+
+
+# import tables and format for PhylloSeq
+metaphlan <- read_tsv("../Metaphlan3/merged_abundance_table.txt") 
+# select the species level information
+metaphlan_s <- metaphlan %>% separate(clade_name, 
+                                    into=c("kingdom","Phylum","class","order","family","genera","species"), 
+                                    sep="\\|") %>%
+                            separate(NCBI_tax_id, 
+                                    into=c("Tax_kingdom","Tax_Phylum","Tax_class","Tax_order","Tax_family","Tax_genera","TaxID"), 
+                                    sep="\\|") %>%
+                            mutate(kingdom=str_replace(kingdom, "k__", "")) %>%
+                            mutate(Phylum=ifelse(kingdom=="Unknown", "Unknown", str_replace(Phylum, "p__", ""))) %>%
+                            mutate(class=ifelse(kingdom=="Unknown", "Unknown", str_replace(class, "c__", ""))) %>%
+                            mutate(order=ifelse(kingdom=="Unknown", "Unknown", str_replace(order, "o__", ""))) %>%
+                            mutate(family=ifelse(kingdom=="Unknown", "Unknown", str_replace(family, "f__", ""))) %>%
+                            mutate(genera=ifelse(kingdom=="Unknown", "Unknown", str_replace(genera, "g__", ""))) %>%
+                            mutate(species=ifelse(kingdom=="Unknown", "Unknown", str_replace(species, "s__", ""))) %>%
+                            mutate(TaxID=ifelse(kingdom=="Unknown", "-1", TaxID)) %>%
+                            filter(!is.na(species))
+
+# remove samples with less than 10 taxonomic assignments
+nonzero <- function(x) sum(x != 0)
+meta_exclude <- metaphlan_s %>% summarise(across(starts_with("Hel"), nonzero)) %>% 
+  pivot_longer(everything(),names_to="samples", values_to="nb_tax") %>%
+  filter(nb_tax<10) %>% select(samples) %>%
+  pull()
+
+metaphlan_s <- metaphlan_s %>% select(- all_of(meta_exclude))
+
+
+## create TaxTable
+taxMat <-  metaphlan_s %>% select(TaxID, kingdom, Phylum, class, order, family, genera, species) 
+taxMat <- taxMat %>% tibble::column_to_rownames("TaxID")
+TAX = tax_table(as.matrix(taxMat))
+
+## create countTable
+countMat <- metaphlan_s %>% select(-kingdom, -Phylum, -class, -order, -family, -genera, -species, 
+                                   -Tax_kingdom, -Tax_Phylum, -Tax_class, -Tax_order, -Tax_family, -Tax_genera)
+countMat <- countMat %>% tibble::column_to_rownames("TaxID")
+OTU = otu_table(as.matrix(countMat), taxa_are_rows = TRUE)
+
+## sample description file 
+sampleMat <- read_csv("../Metaphlan3/sample_table_12.04.21.csv") 
+sampleMat <- sampleMat %>%tibble::column_to_rownames("sample_ID")
+SAMPLE = sample_data(as.data.frame(sampleMat))
+
+physeq = phyloseq(OTU, TAX, SAMPLE)
+```
+
+# Microbiome composition analysis
+
+## parent samples
+
+```{r}
+# subset to mother and fathers samples & aggregate to Phyla taxonomic level
+pseq.parents <- subset_samples(physeq, (sample_type %in% c("M", "F"))) %>%
+   aggregate_taxa(level = "Phylum") 
+
+# plot composition
+p <- plot_composition(pseq.parents, group_by = "sample_type") +
+     guides(fill = guide_legend(ncol = 1)) +
+     labs(x = "Samples", y = "Relative abundance (%)",
+              title = "Parent samples")
+
+p
+```
+
+## Infant samples
+
+### Exploration Sample B1
+
+```{r}
+# subset to infant samples
+pseq.B1 <- subset_samples(physeq, (sample_type=="B1"))  
+
+# Define detection and prevalence thresholds to filter out rare taxa
+p0 <- core(pseq.B1, detection = 0.1/100, prevalence = 1/100)
+
+# For the available taxonomic levels
+plot_taxa_prevalence(p0, "Phylum", detection = 0.1/100)
+
+```
+
+## Exploration samples composition
+
+```{r}
+
+pseq.B12345 <- subset_samples(physeq, (sample_type %in% c("B1","B4", "B5"))) %>%
+   aggregate_taxa(level = "Phylum")
+
+p <- plot_composition(pseq.B12345, group_by = "sample_type")
+print(p)
+```
+
+
+# Exploration technical biases
+
+```{r}
+# Define detection and prevalence thresholds to filter out rare taxa
+physeq.core <- core(physeq, detection = 0.1/100, prevalence = 1/100)
+
+set.seed(4235421)
+ord <- ordinate(physeq.core, "MDS", "bray")
+
+# Illustrate sample similarities with PCoA (NMDS)
+plot_ordination(physeq.core, ord, color = "Run_ID") +
+  geom_point(size = 5)
+```
+
+## samples overview
+
+```{r}
+
+plot_ordination(physeq.core, ord, color = "sample_type") +
+  geom_point(size = 5)
+
+```
+## Birth modes
+
+```{r}
+# MDS looking at the birth mode
+physeq.B1 <- subset_samples(physeq, (sample_type == "B1"))
+
+# Define detection and prevalence thresholds to filter out rare taxa (>0.1% relative abundance in >10% of the samples)
+physeq.B1core <- core(physeq.B1, detection = 0.1/100, prevalence = 1/100)
+
+# DMS
+set.seed(4235421)
+ord <- ordinate(physeq.B1core, "MDS", "bray")
+
+plot_ordination(physeq.B1core, ord, color = "inf_DeliveryMode", label = "Family_ID") +
+  geom_point(size = 2)
+
+
+```
+
